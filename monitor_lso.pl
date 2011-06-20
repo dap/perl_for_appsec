@@ -10,7 +10,9 @@
 use Modern::Perl;
 use threads;
 use Thread::Queue;
-#use App::Daemon qw(daemonize);
+use File::Find;
+use Growl::NotifySend;
+use App::Daemon qw(daemonize);
 use Sys::Syslog qw(:standard :macros);
 use Linux::Inotify2;
 use IO::All;
@@ -22,8 +24,14 @@ sub inspect_file {
 
 	my $message = "$file_path written.";
 
+	#my $notify = Growl::NotifySend->show(
+	#	summary => 'LSO Alert',
+	#	body => $message,
+	#	# TODO: Find and report bug with expire_time passing
+	#	#expire_time => 2,
+	#);
 	syslog(LOG_ALERT, $message);
-
+	
 	return;
 }
 
@@ -38,7 +46,7 @@ sub main {
 	openlog('monitor_lso', '', LOG_USER);
 
 	# Daemonize process
-	#daemonize();
+	daemonize();
 	syslog(LOG_INFO, "Daemon started; watching $directory");
 
 	# Create queue for processing new files
@@ -56,22 +64,21 @@ sub main {
 		or die "Could not create new inotify object: $!";
 
 	# Define filesystem events which require inspection
-	opendir(my $dh, $directory);
-	while (my $dir = readdir $dh) {
-		next if $dir =~ m/^\.{1,2}$/;
-		$dir = $directory . '/' . $dir;
-		next unless -d $dir;
-		say $dir;
+	no warnings 'File::Find';
+	find( sub{
+		my $dir = $File::Find::name;
+		return unless -d $dir;
 		$inotify->watch( $dir, IN_CREATE | IN_MODIFY | IN_MOVED_TO, sub {
-			say "called";
+			# TODO add a watcher is a new directory is created
 			my $e = shift;
 			$file_queue->enqueue($e->fullname);
 		});
-	}
-	close $dh;
+	}, $directory);
 
 	# Start manual event loop, waiting for events in supplied directory
 	1 while $inotify->poll;
+
+	syslog(LOG_INFO, "Daemon started; watching $directory");	
 }
 
 main() if $0 eq __FILE__;
